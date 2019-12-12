@@ -29,7 +29,10 @@ public class AutoFitTextureView extends GLSurfaceView {
         }
         mRatioWidth = width;
         mRatioHeight = height;
-        requestLayout();
+        /**
+         * it's no need to requestLayout(),because we use 'gl' to draw our new view!
+         */
+        //requestLayout();
     }
 
     @Override

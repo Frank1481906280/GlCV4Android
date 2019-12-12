@@ -7,9 +7,7 @@ import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.ImageFormat;
-import android.graphics.Matrix;
 import android.graphics.Point;
-import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -23,6 +21,7 @@ import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
+import android.opengl.GLES11Ext;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,6 +47,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -59,8 +59,28 @@ import java.util.concurrent.TimeUnit;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+import static android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
+import static android.opengl.GLES20.GL_COLOR_BUFFER_BIT;
+import static android.opengl.GLES20.GL_FLOAT;
+import static android.opengl.GLES20.GL_FRAMEBUFFER;
+import static android.opengl.GLES20.GL_TRIANGLES;
+import static android.opengl.GLES20.glActiveTexture;
+import static android.opengl.GLES20.glBindFramebuffer;
+import static android.opengl.GLES20.glBindTexture;
+import static android.opengl.GLES20.glClear;
+import static android.opengl.GLES20.glClearColor;
+import static android.opengl.GLES20.glDrawArrays;
+import static android.opengl.GLES20.glEnableVertexAttribArray;
+import static android.opengl.GLES20.glGenFramebuffers;
+import static android.opengl.GLES20.glGetAttribLocation;
+import static android.opengl.GLES20.glGetUniformLocation;
+import static android.opengl.GLES20.glUniform1i;
+import static android.opengl.GLES20.glUniformMatrix4fv;
+import static android.opengl.GLES20.glVertexAttribPointer;
+import static android.opengl.GLES20.glViewport;
 
-class Camera2BasicFragment extends Fragment implements View.OnClickListener, ActivityCompat.OnRequestPermissionsResultCallback {
+
+public class Camera2BasicFragment extends Fragment implements View.OnClickListener, ActivityCompat.OnRequestPermissionsResultCallback {
 
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
     private static final int REQUEST_CAMERA_PERMISSION = 1;
@@ -71,7 +91,13 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
         ORIENTATIONS.append(Surface.ROTATION_180, 270);
         ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
+    /**
+     * We need some flags to process our camera data
+     */
+    static int isgray=0,isbinary=1,isedge=2,isblur=3,isfacedetect=4,isSSDDetect=5;
+    static boolean grayflag=false,binaryflag=false,edgeflag=false,blurflag=false,facedetectflag=false,SSDDetectflag=false,isdraw=false;
     private AutoFitTextureView autoFitTextureView;
+    private SurfaceTexture mSurfaceTexture;
     /**
      * Tag for the {@link Log}.
      */
@@ -107,22 +133,6 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
      */
     private static final int MAX_PREVIEW_WIDTH = 1920;
 
-    private GLSurfaceView.Renderer renderer=new GLSurfaceView.Renderer() {
-        @Override
-        public void onSurfaceCreated(GL10 gl10, EGLConfig eglConfig) {
-
-        }
-
-        @Override
-        public void onSurfaceChanged(GL10 gl10, int i, int i1) {
-
-        }
-
-        @Override
-        public void onDrawFrame(GL10 gl10) {
-
-        }
-    };
     /**
      * Max preview height that is guaranteed by Camera2 API
      */
@@ -158,7 +168,7 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
             // This method is called when the camera is opened. We start camera preview here.
             mCameraOpenCloseLock.release();
             mCameraDevice = cameraDevice;
-            createCameraPreviewSession();
+            //createCameraPreviewSession();
         }
 
         @Override
@@ -232,6 +242,100 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
      * Orientation of the camera sensor
      */
     private int mSensorOrientation;
+    /**
+     * add a render to apply GLsurfaceview
+     */
+    boolean bIsPreviewStarted;
+    private int mOESTextureId = -1;
+    private float[] transformMatrix = new float[16];
+    private FilterEngine mFilterEngine;
+    private FloatBuffer mDataBuffer;
+    private int mShaderProgram = -1;
+    private int aPositionLocation = -1;
+    private int aTextureCoordLocation = -1;
+    private int uTextureMatrixLocation = -1;
+    private int uTextureSamplerLocation = -1;
+    private int[] mFBOIds = new int[1];
+    private GLSurfaceView.Renderer renderer=new GLSurfaceView.Renderer() {
+        @Override
+        public void onSurfaceCreated(GL10 gl10, EGLConfig eglConfig) {
+            openCamera(MAX_PREVIEW_WIDTH,MAX_PREVIEW_HEIGHT);
+            mOESTextureId = Utils.createOESTextureObject();
+            mFilterEngine = new FilterEngine(mOESTextureId,getActivity());
+            mDataBuffer = mFilterEngine.getBuffer();
+            mShaderProgram = mFilterEngine.getShaderProgram();
+            glGenFramebuffers(1, mFBOIds, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, mFBOIds[0]);
+            Log.i(TAG, "onSurfaceCreated: mFBOId: " + mFBOIds[0]);
+            if (!bIsPreviewStarted) {
+                bIsPreviewStarted = initSurfaceTexture();
+                bIsPreviewStarted = true;
+                return;
+            }
+        }
+
+        @Override
+        public void onSurfaceChanged(GL10 gl10, int width, int height) {
+            glViewport(0,0, width, height);
+        }
+
+        @Override
+        public void onDrawFrame(GL10 gl10) {
+//            if (mSurfaceTexture != null) {
+//                mSurfaceTexture.updateTexImage();
+//                mSurfaceTexture.getTransformMatrix(transformMatrix);
+//            }
+//
+//            glClear(GL_COLOR_BUFFER_BIT);
+//            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+//
+//            aPositionLocation = glGetAttribLocation(mShaderProgram, FilterEngine.POSITION_ATTRIBUTE);
+//            aTextureCoordLocation = glGetAttribLocation(mShaderProgram, FilterEngine.TEXTURE_COORD_ATTRIBUTE);
+//            uTextureMatrixLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_MATRIX_UNIFORM);
+//            uTextureSamplerLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_SAMPLER_UNIFORM);
+//
+//            glActiveTexture(GL_TEXTURE_EXTERNAL_OES);
+//            glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mOESTextureId);
+//            glUniform1i(uTextureSamplerLocation, 0);
+//            glUniformMatrix4fv(uTextureMatrixLocation, 1, false, transformMatrix, 0);
+//
+//            if (mDataBuffer != null) {
+//                mDataBuffer.position(0);
+//                glEnableVertexAttribArray(aPositionLocation);
+//                glVertexAttribPointer(aPositionLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
+//
+//                mDataBuffer.position(2);
+//                glEnableVertexAttribArray(aTextureCoordLocation);
+//                glVertexAttribPointer(aTextureCoordLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
+//            }
+//            glDrawArrays(GL_TRIANGLES, 0, 6);
+//            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+    };
+
+    private boolean initSurfaceTexture() {
+        if (mCameraDevice == null || autoFitTextureView == null) {
+            Log.i(TAG, "mCamera or mGLSurfaceView is null!");
+            return false;
+        }
+        mSurfaceTexture = new SurfaceTexture(mOESTextureId);
+        createCameraPreviewSession();
+        //where OESTextureID is linked to the view
+        mSurfaceTexture.setOnFrameAvailableListener(new SurfaceTexture.OnFrameAvailableListener() {
+            @Override
+            public void onFrameAvailable(SurfaceTexture surfaceTexture) {
+                autoFitTextureView.requestRender();
+                try {
+                    mCaptureSession.setRepeatingRequest(mPreviewRequest,
+                            null, mBackgroundHandler);
+                } catch (CameraAccessException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        return true;
+    }
 
     /**
      * This a callback object for the {@link ImageReader}. "onImageAvailable" will be called when a
@@ -239,13 +343,13 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
      */
     private final ImageReader.OnImageAvailableListener mOnImageAvailableListener
             = new ImageReader.OnImageAvailableListener() {
-
         @Override
         public void onImageAvailable(ImageReader reader) {
             final Image image = reader.acquireLatestImage();
             mBackgroundHandler.post(new Runnable() {
                 @Override
                 public void run() {
+                    Log.d("pcwork","nothing!");
                 }
             });
             image.close();
@@ -405,9 +509,11 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
         view.findViewById(R.id.edge).setOnClickListener(this);
         view.findViewById(R.id.facedetect).setOnClickListener(this);
         view.findViewById(R.id.SSDDetect).setOnClickListener(this);
-        autoFitTextureView = (AutoFitTextureView) view.findViewById(R.id.texture);
-
-
+        autoFitTextureView = view.findViewById(R.id.texture);
+        bIsPreviewStarted=false;
+        autoFitTextureView.setEGLContextClientVersion(2);
+        autoFitTextureView.setRenderer(renderer);
+        autoFitTextureView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
     }
 
     @Override
@@ -428,7 +534,7 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
         if (autoFitTextureView.isActivated()) {
             openCamera(autoFitTextureView.getWidth(), autoFitTextureView.getHeight());
         } else {
-            autoFitTextureView.setRenderer(renderer);
+            autoFitTextureView.onResume();
         }
     }
 
@@ -473,6 +579,7 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
         CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
         try {
             for (String cameraId : manager.getCameraIdList()) {
+                Log.d("PC1",cameraId);
                 CameraCharacteristics characteristics
                         = manager.getCameraCharacteristics(cameraId);
 
@@ -492,17 +599,19 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
                 Size largest = Collections.max(
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
+                Log.d("test","PCImage");
                 mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.JPEG, /*maxImages*/2);
+                        ImageFormat.YUV_420_888, /*maxImages*/5);
                 mImageReader.setOnImageAvailableListener(
                         mOnImageAvailableListener, mBackgroundHandler);
-
+                Log.d("PC2",cameraId);
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 int displayRotation = activity.getWindowManager().getDefaultDisplay().getRotation();
                 //noinspection ConstantConditions
                 mSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
                 boolean swappedDimensions = false;
+                Log.d("PC3",cameraId);
                 switch (displayRotation) {
                     case Surface.ROTATION_0:
                     case Surface.ROTATION_180:
@@ -519,7 +628,6 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
                     default:
                         Log.e(TAG, "Display rotation is invalid: " + displayRotation);
                 }
-
                 Point displaySize = new Point();
                 activity.getWindowManager().getDefaultDisplay().getSize(displaySize);
                 int rotatedPreviewWidth = width;
@@ -541,28 +649,24 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
                 if (maxPreviewHeight > MAX_PREVIEW_HEIGHT) {
                     maxPreviewHeight = MAX_PREVIEW_HEIGHT;
                 }
-
                 // Danger, W.R.! Attempting to use too large a preview size could exceed the camera
                 // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
                 // garbage capture data.
                 mPreviewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class),
                         rotatedPreviewWidth, rotatedPreviewHeight, maxPreviewWidth,
                         maxPreviewHeight, largest);
-
                 // We fit the aspect ratio of TextureView to the size of preview we picked.
                 int orientation = getResources().getConfiguration().orientation;
                 if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                   autoFitTextureView.setAspectRatio(
+                    autoFitTextureView.setAspectRatio(
                             mPreviewSize.getWidth(), mPreviewSize.getHeight());
                 } else {
                     autoFitTextureView.setAspectRatio(
                             mPreviewSize.getHeight(), mPreviewSize.getWidth());
                 }
-
                 // Check if the flash is supported.
                 Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
                 mFlashSupported = available == null ? false : available;
-
                 mCameraId = cameraId;
                 return;
             }
@@ -585,15 +689,16 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
             requestCameraPermission();
             return;
         }
-        setUpCameraOutputs(width, height);
-        configureTransform(width, height);
+        Log.d("PCC","setup test");
         Activity activity = getActivity();
         CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
         try {
             if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
                 throw new RuntimeException("Time out waiting to lock camera opening.");
             }
-            manager.openCamera(mCameraId, mStateCallback, mBackgroundHandler);
+            setUpCameraOutputs(width, height);
+            Log.d("111","cameraid"+mCameraId);
+            manager.openCamera("0", mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
             e.printStackTrace();
         } catch (InterruptedException e) {
@@ -654,15 +759,9 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
      */
     private void createCameraPreviewSession() {
         try {
-            AutoFitTextureView texture = autoFitTextureView;
-            assert texture != null;
-
-            // We configure the size of default buffer to be the size of camera preview we want.
-            texture.setRenderer(renderer);
-
+            mSurfaceTexture.setDefaultBufferSize(MAX_PREVIEW_WIDTH, MAX_PREVIEW_HEIGHT);
+            Surface surface = new Surface(mSurfaceTexture);
             // This is the output Surface we need to start preview.
-            Surface surface = new Surface(texture);
-
             // We set up a CaptureRequest.Builder with the output Surface.
             mPreviewRequestBuilder
                     = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
@@ -678,23 +777,15 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
                             if (null == mCameraDevice) {
                                 return;
                             }
-
                             // When the session is ready, we start displaying the preview.
                             mCaptureSession = cameraCaptureSession;
-                            try {
-                                // Auto focus should be continuous for camera preview.
-                                mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-                                // Flash is automatically enabled when necessary.
-                                setAutoFlash(mPreviewRequestBuilder);
-
-                                // Finally, we start displaying the camera preview.
-                                mPreviewRequest = mPreviewRequestBuilder.build();
-                                mCaptureSession.setRepeatingRequest(mPreviewRequest,
-                                        mCaptureCallback, mBackgroundHandler);
-                            } catch (CameraAccessException e) {
-                                e.printStackTrace();
-                            }
+                            // Auto focus should be continuous for camera preview.
+                            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                            // Flash is automatically enabled when necessary.
+                            setAutoFlash(mPreviewRequestBuilder);
+                            // Finally, we start displaying the camera preview.
+                            mPreviewRequest = mPreviewRequestBuilder.build();
                         }
 
                         @Override
@@ -702,7 +793,7 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
                                 @NonNull CameraCaptureSession cameraCaptureSession) {
                             showToast("Failed");
                         }
-                    }, null
+                    }, mBackgroundHandler
             );
         } catch (CameraAccessException e) {
             e.printStackTrace();
@@ -716,38 +807,6 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
         }
     }
 
-    /**
-     * Configures the necessary {@link android.graphics.Matrix} transformation to `mTextureView`.
-     * This method should be called after the camera preview size is determined in
-     * setUpCameraOutputs and also the size of `mTextureView` is fixed.
-     *
-     * @param viewWidth  The width of `mTextureView`
-     * @param viewHeight The height of `mTextureView`
-     */
-    private void configureTransform(int viewWidth, int viewHeight) {
-        Activity activity = getActivity();
-        if (null == autoFitTextureView || null == mPreviewSize || null == activity) {
-            return;
-        }
-        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
-        Matrix matrix = new Matrix();
-        RectF viewRect = new RectF(0, 0, viewWidth, viewHeight);
-        RectF bufferRect = new RectF(0, 0, mPreviewSize.getHeight(), mPreviewSize.getWidth());
-        float centerX = viewRect.centerX();
-        float centerY = viewRect.centerY();
-        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY());
-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL);
-            float scale = Math.max(
-                    (float) viewHeight / mPreviewSize.getHeight(),
-                    (float) viewWidth / mPreviewSize.getWidth());
-            matrix.postScale(scale, scale, centerX, centerY);
-            matrix.postRotate(90 * (rotation - 2), centerX, centerY);
-        } else if (Surface.ROTATION_180 == rotation) {
-            matrix.postRotate(180, centerX, centerY);
-        }
-        //mTextureView.setTransform(matrix);
-    }
 
     /**
      * Initiate a still image capture.
@@ -998,6 +1057,40 @@ class Camera2BasicFragment extends Fragment implements View.OnClickListener, Act
     }
     @Override
     public void onClick(View view) {
-
+        switch (view.getId()) {
+            case R.id.picture: {
+                takePicture();
+                break;
+            }
+            case R.id.info: {
+                Activity activity = getActivity();
+                if (null != activity) {
+                    new AlertDialog.Builder(activity)
+                            .setMessage(R.string.intro_message)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show();
+                }
+                break;
+            }
+            case R.id.gray:
+                grayflag=true;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=false;
+                break;
+            case R.id.edge:
+                Log.d("PCtest","edge");
+                grayflag=false;edgeflag=true;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=false;
+                break;
+            case R.id.binary:
+                grayflag=false;edgeflag=false;binaryflag=true;blurflag=false;facedetectflag=false;SSDDetectflag=false;
+                break;
+            case R.id.Blur:
+                grayflag=false;edgeflag=false;binaryflag=false;blurflag=true;facedetectflag=false;SSDDetectflag=false;
+                break;
+            case R.id.facedetect:
+                grayflag=false;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=true;SSDDetectflag=false;
+                break;
+            case R.id.SSDDetect:
+                grayflag=false;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=true;
+                break;
+        }
     }
 }
