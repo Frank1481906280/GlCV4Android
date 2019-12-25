@@ -3,6 +3,7 @@ package com.example.glcv4android;
 import android.content.Context;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -46,12 +47,29 @@ class FilterEngine {
     private int uTextureMatrixLocation = -1;
     private int uTextureSamplerLocation = -1;
 
-    public FilterEngine(int OESTextureId, Context context) {
+    public FilterEngine(int OESTextureId, Context context,int type) {
         mContext = context;
         mOESTextureId = OESTextureId;
         mBuffer = createBuffer(vertexData);
         vertexShader = loadShader(GL_VERTEX_SHADER, Utils.readShaderFromResource(mContext, R.raw.base_vertex_shader));
-        fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.base_fragment_shader));
+        switch (type){
+            case 0:
+                fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.base_fragment_shader));
+            break;
+            case 1:
+                fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.binary_shader));
+            break;
+            case 2:
+                fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.edge_shader));
+            break;
+            case 3:
+                fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.shared9_shader));
+            break;
+            case 4:
+                fragmentShader = loadShader(GL_FRAGMENT_SHADER, Utils.readShaderFromResource(mContext, R.raw.roration_shader));
+            break;
+        }
+
         mShaderProgram = linkProgram(vertexShader, fragmentShader);
     }
 

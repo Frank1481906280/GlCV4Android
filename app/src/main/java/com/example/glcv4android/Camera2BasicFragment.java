@@ -22,10 +22,12 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
 import android.opengl.GLES11Ext;
+import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.text.LoginFilter;
 import android.util.Log;
 import android.util.Size;
 import android.util.SparseIntArray;
@@ -47,6 +49,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -94,18 +97,11 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
     /**
      * We need some flags to process our camera data
      */
-    static int isgray=0,isbinary=1,isedge=2,isblur=3,isfacedetect=4,isSSDDetect=5;
-    static boolean grayflag=false,binaryflag=false,edgeflag=false,blurflag=false,facedetectflag=false,SSDDetectflag=false,isdraw=false;
+    static int isnormal=0,isbinary=1,isedge=2,isshared9=3,isroration=4;
+    static boolean binaryflag=false,edgeflag=false,shared9flag=false,facedetectflag=false,SSDDetectflag=false,rorationflag=false;
     private AutoFitTextureView autoFitTextureView;
     private SurfaceTexture mSurfaceTexture;
-    /**
-     * Tag for the {@link Log}.
-     */
     private static final String TAG = "Camera2BasicFragment";
-
-    /**
-     * Camera state: Showing camera preview.
-     */
     private static final int STATE_PREVIEW = 0;
 
     /**
@@ -157,6 +153,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
      * The {@link android.util.Size} of camera preview.
      */
     private Size mPreviewSize;
+    private ByteBuffer byteBuffer;
 
     /**
      * {@link CameraDevice.StateCallback} is called when {@link CameraDevice} changes its state.
@@ -246,32 +243,47 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
      * add a render to apply GLsurfaceview
      */
     boolean bIsPreviewStarted;
+
     private int mOESTextureId = -1;
+
     private float[] transformMatrix = new float[16];
+
     private FilterEngine mFilterEngine;
+
     private FloatBuffer mDataBuffer;
+
     private int mShaderProgram = -1;
+
     private int aPositionLocation = -1;
+
     private int aTextureCoordLocation = -1;
+
     private int uTextureMatrixLocation = -1;
+
     private int uTextureSamplerLocation = -1;
+
     private int[] mFBOIds = new int[1];
+
     private GLSurfaceView.Renderer renderer=new GLSurfaceView.Renderer() {
         @Override
         public void onSurfaceCreated(GL10 gl10, EGLConfig eglConfig) {
+            //打开相机
             openCamera(MAX_PREVIEW_WIDTH,MAX_PREVIEW_HEIGHT);
+            /**
+             * 初始化纹理，初始化顶点颜色
+             */
+            GLES30.glClearColor(0,0,0,1.0f);
             mOESTextureId = Utils.createOESTextureObject();
-            mFilterEngine = new FilterEngine(mOESTextureId,getActivity());
-            mDataBuffer = mFilterEngine.getBuffer();
-            mShaderProgram = mFilterEngine.getShaderProgram();
-            glGenFramebuffers(1, mFBOIds, 0);
+            Log.d("pctest","work on initing!");
             glBindFramebuffer(GL_FRAMEBUFFER, mFBOIds[0]);
             Log.i(TAG, "onSurfaceCreated: mFBOId: " + mFBOIds[0]);
+
             if (!bIsPreviewStarted) {
                 bIsPreviewStarted = initSurfaceTexture();
                 bIsPreviewStarted = true;
                 return;
             }
+
         }
 
         @Override
@@ -281,35 +293,47 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
 
         @Override
         public void onDrawFrame(GL10 gl10) {
-//            if (mSurfaceTexture != null) {
-//                mSurfaceTexture.updateTexImage();
-//                mSurfaceTexture.getTransformMatrix(transformMatrix);
-//            }
-//
-//            glClear(GL_COLOR_BUFFER_BIT);
-//            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-//
-//            aPositionLocation = glGetAttribLocation(mShaderProgram, FilterEngine.POSITION_ATTRIBUTE);
-//            aTextureCoordLocation = glGetAttribLocation(mShaderProgram, FilterEngine.TEXTURE_COORD_ATTRIBUTE);
-//            uTextureMatrixLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_MATRIX_UNIFORM);
-//            uTextureSamplerLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_SAMPLER_UNIFORM);
-//
-//            glActiveTexture(GL_TEXTURE_EXTERNAL_OES);
-//            glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mOESTextureId);
-//            glUniform1i(uTextureSamplerLocation, 0);
-//            glUniformMatrix4fv(uTextureMatrixLocation, 1, false, transformMatrix, 0);
-//
-//            if (mDataBuffer != null) {
-//                mDataBuffer.position(0);
-//                glEnableVertexAttribArray(aPositionLocation);
-//                glVertexAttribPointer(aPositionLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
-//
-//                mDataBuffer.position(2);
-//                glEnableVertexAttribArray(aTextureCoordLocation);
-//                glVertexAttribPointer(aTextureCoordLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
-//            }
-//            glDrawArrays(GL_TRIANGLES, 0, 6);
-//            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            if (mSurfaceTexture != null) {
+                mSurfaceTexture.updateTexImage();
+                mSurfaceTexture.getTransformMatrix(transformMatrix);
+            }
+            glClear(GL_COLOR_BUFFER_BIT);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            if(binaryflag){
+                mFilterEngine = new FilterEngine(mOESTextureId,getActivity(),isbinary);
+            }else if(edgeflag){
+                mFilterEngine = new FilterEngine(mOESTextureId,getActivity(),isedge);
+            }else if(shared9flag){
+                mFilterEngine = new FilterEngine(mOESTextureId,getActivity(),isshared9);
+            }else if(rorationflag){
+                mFilterEngine = new FilterEngine(mOESTextureId,getActivity(),isroration);
+            }else {
+                mFilterEngine = new FilterEngine(mOESTextureId,getActivity(),isnormal);
+            }
+
+            mDataBuffer = mFilterEngine.getBuffer();
+            mShaderProgram = mFilterEngine.getShaderProgram();
+            aPositionLocation = glGetAttribLocation(mShaderProgram, FilterEngine.POSITION_ATTRIBUTE);
+            aTextureCoordLocation = glGetAttribLocation(mShaderProgram, FilterEngine.TEXTURE_COORD_ATTRIBUTE);
+            uTextureMatrixLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_MATRIX_UNIFORM);
+            uTextureSamplerLocation = glGetUniformLocation(mShaderProgram, FilterEngine.TEXTURE_SAMPLER_UNIFORM);
+
+            glActiveTexture(GL_TEXTURE_EXTERNAL_OES);
+            glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mOESTextureId);
+            glUniform1i(uTextureSamplerLocation, 0);
+            glUniformMatrix4fv(uTextureMatrixLocation, 1, false, transformMatrix, 0);
+
+            if (mDataBuffer != null) {
+                mDataBuffer.position(0);
+                glEnableVertexAttribArray(aPositionLocation);
+                glVertexAttribPointer(aPositionLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
+
+                mDataBuffer.position(2);
+                glEnableVertexAttribArray(aTextureCoordLocation);
+                glVertexAttribPointer(aTextureCoordLocation, 2, GL_FLOAT, false, 16, mDataBuffer);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
     };
 
@@ -325,34 +349,15 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             @Override
             public void onFrameAvailable(SurfaceTexture surfaceTexture) {
                 autoFitTextureView.requestRender();
-                try {
-                    mCaptureSession.setRepeatingRequest(mPreviewRequest,
-                            null, mBackgroundHandler);
-                } catch (CameraAccessException e) {
-                    e.printStackTrace();
-                }
+
             }
         });
 
         return true;
     }
-
-    /**
-     * This a callback object for the {@link ImageReader}. "onImageAvailable" will be called when a
-     * still image is ready to be saved.
-     */
-    private final ImageReader.OnImageAvailableListener mOnImageAvailableListener
-            = new ImageReader.OnImageAvailableListener() {
+    private final ImageReader.OnImageAvailableListener mOnImageAvailableListener=new ImageReader.OnImageAvailableListener() {
         @Override
         public void onImageAvailable(ImageReader reader) {
-            final Image image = reader.acquireLatestImage();
-            mBackgroundHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    Log.d("pcwork","nothing!");
-                }
-            });
-            image.close();
         }
 
     };
@@ -361,7 +366,6 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
      */
     private CameraCaptureSession.CaptureCallback mCaptureCallback
             = new CameraCaptureSession.CaptureCallback() {
-
         private void process(CaptureResult result) {
             switch (mState) {
                 case STATE_PREVIEW: {
@@ -434,8 +438,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         if (activity != null) {
             activity.runOnUiThread(new Runnable() {
                 @Override
-                public void run() {
-                    Toast.makeText(activity, text, Toast.LENGTH_SHORT).show();
+                public void run() { Toast.makeText(activity, text, Toast.LENGTH_SHORT).show();
                 }
             });
         }
@@ -505,13 +508,13 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         view.findViewById(R.id.info).setOnClickListener(this);
         /*add these radiobuttons*/
         view.findViewById(R.id.binary).setOnClickListener(this);
-        view.findViewById(R.id.Blur).setOnClickListener(this);
+        view.findViewById(R.id.shared9).setOnClickListener(this);
         view.findViewById(R.id.edge).setOnClickListener(this);
         view.findViewById(R.id.facedetect).setOnClickListener(this);
         view.findViewById(R.id.SSDDetect).setOnClickListener(this);
         autoFitTextureView = view.findViewById(R.id.texture);
         bIsPreviewStarted=false;
-        autoFitTextureView.setEGLContextClientVersion(2);
+        autoFitTextureView.setEGLContextClientVersion(3);
         autoFitTextureView.setRenderer(renderer);
         autoFitTextureView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
     }
@@ -599,12 +602,6 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                 Size largest = Collections.max(
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
-                Log.d("test","PCImage");
-                mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.YUV_420_888, /*maxImages*/5);
-                mImageReader.setOnImageAvailableListener(
-                        mOnImageAvailableListener, mBackgroundHandler);
-                Log.d("PC2",cameraId);
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 int displayRotation = activity.getWindowManager().getDefaultDisplay().getRotation();
@@ -667,6 +664,9 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                 // Check if the flash is supported.
                 Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
                 mFlashSupported = available == null ? false : available;
+                mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
+                        ImageFormat.YUV_420_888, /*maxImages*/5);
+
                 mCameraId = cameraId;
                 return;
             }
@@ -689,6 +689,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             requestCameraPermission();
             return;
         }
+        setUpCameraOutputs(width, height);
         Log.d("PCC","setup test");
         Activity activity = getActivity();
         CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
@@ -696,7 +697,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
                 throw new RuntimeException("Time out waiting to lock camera opening.");
             }
-            setUpCameraOutputs(width, height);
+
             Log.d("111","cameraid"+mCameraId);
             manager.openCamera("0", mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
@@ -766,6 +767,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             mPreviewRequestBuilder
                     = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             mPreviewRequestBuilder.addTarget(surface);
+            //mPreviewRequestBuilder.addTarget(mImageReader.getSurface());
 
             // Here, we create a CameraCaptureSession for camera preview.
             mCameraDevice.createCaptureSession(Arrays.asList(surface, mImageReader.getSurface()),
@@ -786,6 +788,12 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                             setAutoFlash(mPreviewRequestBuilder);
                             // Finally, we start displaying the camera preview.
                             mPreviewRequest = mPreviewRequestBuilder.build();
+                            try {
+                                mCaptureSession.setRepeatingRequest(mPreviewRequest,
+                                        null, mBackgroundHandler);
+                            } catch (CameraAccessException e) {
+                                e.printStackTrace();
+                            }
                         }
 
                         @Override
@@ -1072,24 +1080,24 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                 }
                 break;
             }
-            case R.id.gray:
-                grayflag=true;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=false;
-                break;
+
             case R.id.edge:
                 Log.d("PCtest","edge");
-                grayflag=false;edgeflag=true;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=false;
+                edgeflag=true;binaryflag=false;shared9flag=false;facedetectflag=false;SSDDetectflag=false;rorationflag=false;
                 break;
             case R.id.binary:
-                grayflag=false;edgeflag=false;binaryflag=true;blurflag=false;facedetectflag=false;SSDDetectflag=false;
+                edgeflag=false;binaryflag=true;shared9flag=false;facedetectflag=false;SSDDetectflag=false;rorationflag=false;
                 break;
-            case R.id.Blur:
-                grayflag=false;edgeflag=false;binaryflag=false;blurflag=true;facedetectflag=false;SSDDetectflag=false;
+            case R.id.shared9:
+                edgeflag=false;binaryflag=false;shared9flag=true;facedetectflag=false;SSDDetectflag=false;rorationflag=false;
                 break;
             case R.id.facedetect:
-                grayflag=false;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=true;SSDDetectflag=false;
+                edgeflag=false;binaryflag=false;shared9flag=false;facedetectflag=false;SSDDetectflag=false;rorationflag=true;
                 break;
             case R.id.SSDDetect:
-                grayflag=false;edgeflag=false;binaryflag=false;blurflag=false;facedetectflag=false;SSDDetectflag=true;
+                edgeflag=false;binaryflag=false;shared9flag=false;facedetectflag=false;SSDDetectflag=true;rorationflag=false;
+                break;
+            default:
                 break;
         }
     }
