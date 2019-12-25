@@ -2,7 +2,7 @@ Use GLsurfaceview to render the camera data,I also use opengl es with different 
 
 Here are three types :
 
-Binary :![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/binary.png) edge:![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/edge.png)shared9:![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/shared9.png)
-
+![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/binary.png) ![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/edge.png)![photo](https://github.com/Frank1481906280/GlCV4Android/blob/master/Screenshots/shared9.png)
+             Binary                 edge                       shared9
 I will add more types in the future for learning opengl ES!
 
